@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import mediapipe as mp
+import time
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
@@ -8,11 +9,11 @@ from mediapipe.tasks.python import vision
 base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
 options = vision.HandLandmarkerOptions(
     base_options=base_options,
-    running_mode=vision.RunningMode.IMAGE,
+    running_mode=vision.RunningMode.VIDEO,
     num_hands=1,
-    min_hand_detection_confidence=0.7,
-    min_hand_presence_confidence=0.7,
-    min_tracking_confidence=0.7
+    min_hand_detection_confidence=0.5,
+    min_hand_presence_confidence=0.5,
+    min_tracking_confidence=0.5
 )
 detector = vision.HandLandmarker.create_from_options(options)
 
@@ -60,6 +61,10 @@ print("5. Nhấn phím 'q' trên bàn phím (hoặc đóng cửa sổ) để tho
 print("6. Nhấn phím 'c' để xóa toàn bộ bức tranh.")
 print("-----------------------------------------------------")
 
+# Cần lưu lại thời điểm bắt đầu để tính timestamp cho MediaPipe video mode
+start_time = time.time()
+fist_start_time = 0 # Lưu thời điểm bắt đầu nắm tay để đếm giây
+
 while True:
     # 1. Đọc hình ảnh từ camera
     success, img = cap.read()
@@ -74,7 +79,11 @@ while True:
     # MediaPipe yêu cầu ảnh RGB
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
-    detection_result = detector.detect(mp_image)
+    
+    # Tính timestamp bằng mili giây cho frame hiện tại
+    timestamp_ms = int((time.time() - start_time) * 1000)
+    # Dùng detect_for_video thay vì detect
+    detection_result = detector.detect_for_video(mp_image, timestamp_ms)
     
     # Lấy danh sách các mốc (landmarks) nếu có tay
     lmList = []
@@ -128,12 +137,14 @@ while True:
                 
         # 4. CHẾ ĐỘ XÓA TOÀN BỘ (Clear Mode) - Giơ cả bàn tay (ít nhất 4 ngón)
         if sum(fingers) >= 4:
+            fist_start_time = 0
             canvas = np.zeros((720, 1280, 3), np.uint8)
             cv2.putText(img, "Da xoa toan bo tranh!", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
             xp, yp = 0, 0
             
         # 5. CHẾ ĐỘ TẠM DỪNG VÀ CHỌN MÀU (Selection Mode) - Giơ 2 ngón (Trỏ + Giữa)
         elif len(fingers) >= 2 and fingers[0] == 1 and fingers[1] == 1 and sum(fingers) == 2:
+            fist_start_time = 0
             xp, yp = 0, 0 # Reset điểm vẽ
             cv2.circle(img, (x1, y1), 15, (0, 255, 255), cv2.FILLED)
             cv2.putText(img, "Chon mau / Di chuyen", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
@@ -158,6 +169,7 @@ while True:
             
         # 6. CHẾ ĐỘ VẼ (Drawing Mode) - Chỉ giơ ngón Trỏ
         elif len(fingers) >= 1 and fingers[0] == 1 and sum(fingers) == 1:
+            fist_start_time = 0
             cv2.circle(img, (x1, y1), 15, draw_color, cv2.FILLED)
             
             # Nếu là điểm đầu tiên
@@ -169,9 +181,25 @@ while True:
             # Cập nhật điểm hiện tại thành điểm trước
             xp, yp = x1, y1
             cv2.putText(img, "Dang ve...", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            
+        # 7. CHẾ ĐỘ THOÁT (Exit Mode) - Nắm tay lại (0 ngón nào giơ lên)
+        elif sum(fingers) == 0:
+            if fist_start_time == 0:
+                fist_start_time = time.time()
+                
+            elapsed_time = time.time() - fist_start_time
+            time_left = max(0, 3 - int(elapsed_time))
+            
+            cv2.putText(img, f"Thoat sau: {time_left}s", (450, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 4)
+            if elapsed_time >= 3:
+                print("Đã nắm tay 3 giây! Đang thoát ứng dụng...")
+                break
         else:
             # Không giơ ngón nào hoặc giơ ngón khác
             xp, yp = 0, 0
+            fist_start_time = 0
+    else:
+        fist_start_time = 0
 
     # 6. Gộp hình ảnh camera và canvas lại với nhau
     imgGray = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
